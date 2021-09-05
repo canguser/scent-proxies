@@ -79,6 +79,11 @@ function _removeSubscribe(obj, handler) {
     }
 }
 
+export function _getMaps() {
+    return [
+        originSubscribeMap
+    ];
+}
 
 function _notifyOriginParents(origin, type, property, ...args) {
     const parents: any[] = _getOriginParentsWithChain(origin, [property]);
@@ -259,7 +264,7 @@ export function subscribe(obj, ...args) {
     if (propertyChain == null && isRef(obj)) {
         propertyChain = getRefProperty(obj);
     }
-    if (typeof propertyChain === 'string') {
+    if (propertyChain != null) {
         handler = _parsedPropertyHandler(propertyChain, handler || {});
     }
     return new Subscriber(obj, handler);
