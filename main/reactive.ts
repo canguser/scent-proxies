@@ -172,26 +172,55 @@ export function ref(value, property = 'value') {
     return ref;
 }
 
-export function computed(getter) {
+export function isRef(obj) {
+    return refOriginMap.has(obj);
+}
+
+export function getRefProperty(obj) {
+    if (!isRef(obj)) {
+        throw new TypeError(`obj is not the ref.`);
+    }
+    return refOriginMap.get(obj).property;
+}
+
+export function computed(options) {
+    let getter, setter, property = 'value';
+
+    if (typeof options === 'function') {
+        getter = options;
+    } else if (typeof options === 'object') {
+        getter = options.get || (() => undefined);
+        if (typeof options.set === 'function') {
+            setter = options.set;
+        }
+        if (options.property) {
+            property = options.property;
+        }
+    }
+
     const effectList = [];
     const subscriber = subscribe('all', {
         get(target, propertyChain) {
-            console.log(target, propertyChain);
             effectList.push({
                 target,
                 propertyChain
             });
         }
     });
-    getter();
+    const initValue = getter();
     subscriber.stop();
-    const computedObj = ref(null, 'value');
+    const computedObj = ref(initValue, property);
     for (const { target, propertyChain: pc } of effectList) {
-        subscribe(target, {
-            set(target, propertyChain) {
-                if (propertyChain === pc) {
-                    computedObj.value = getter();
-                }
+        subscribe(target, pc, {
+            set() {
+                computedObj[property] = getter();
+            }
+        });
+    }
+    if (typeof setter === 'function') {
+        subscribe(computedObj, property, {
+            set(target, p, value, old) {
+                setter(value, old);
             }
         });
     }
@@ -210,6 +239,28 @@ export function getReact(obj, isShallow = false) {
     return originProxyMap.get(obj) || react(obj, isShallow);
 }
 
-export function subscribe(obj, handler) {
+function _parsedPropertyHandler(propertyChain, handler = {}) {
+    return Object.entries(handler).reduce((h, [type, value]) => {
+        h[type] = function(target, pc, ...args) {
+            if (typeof value === 'function' && pc === propertyChain) {
+                value.call(this, target, pc, ...args);
+            }
+        };
+        return h;
+    }, {});
+}
+
+export function subscribe(obj, ...args) {
+    let handler, propertyChain;
+    handler = args[args.length - 1];
+    if (args.length > 1) {
+        propertyChain = args[0];
+    }
+    if (propertyChain == null && isRef(obj)) {
+        propertyChain = getRefProperty(obj);
+    }
+    if (typeof propertyChain === 'string') {
+        handler = _parsedPropertyHandler(propertyChain, handler || {});
+    }
     return new Subscriber(obj, handler);
 }
