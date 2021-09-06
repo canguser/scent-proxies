@@ -3,6 +3,8 @@ const proxyOriginMap = new WeakMap();
 const originParentsMap = new WeakMap();
 const originSubscribeMap = new WeakMap();
 const refOriginMap = new WeakMap();
+const proxyRefSubscribesMap = new WeakMap();
+
 let globalSubscribes = [];
 const globalHandler = {
     get(...args) {
@@ -79,6 +81,9 @@ function _removeSubscribe(obj, handler) {
     }
 }
 
+function _invokeGetter(obj) {
+}
+
 export function _getMaps() {
     return [
         originSubscribeMap
@@ -153,7 +158,16 @@ function _react(origin, isShallow = false, parent?: object, parentProperty?: str
         },
         set(target: any, p: string | symbol, value: any, receiver: any): boolean {
             const old = Reflect.get(target, p, receiver);
-            const setResult = Reflect.set(target, p, value, receiver);
+            const originValue = value;
+            if (isRef(value)) {
+                value = getRefValue(value);
+                linkRef(receiver, p, originValue);
+            }
+            if (isReactive(value)) {
+                // keep all value to set is none-proxy
+                value = getOrigin(value);
+            }
+            let setResult = Reflect.set(target, p, value, receiver);
             if (setResult) {
                 _notifyOriginParents(target, 'set', p, value, old);
             }
@@ -164,6 +178,43 @@ function _react(origin, isShallow = false, parent?: object, parentProperty?: str
     originProxyMap.set(origin, proxy);
     proxyOriginMap.set(proxy, origin);
     return proxy;
+}
+
+export function linkRef(obj, property, ref) {
+    if (isRef(ref) && isReactive(obj)) {
+        const map = proxyRefSubscribesMap.get(obj) || {};
+        let subscribers = map[property] || [];
+
+        for (const subscriber of subscribers) {
+            subscriber.stop();
+        }
+
+        const refProperty = getRefProperty(ref);
+        const refSubscriber = subscribe(ref, refProperty, {
+            set: (target, p, value, old) => {
+                if (value !== old) {
+                    obj[property] = value;
+                }
+            },
+            get: () => {
+                _invokeGetter(obj[property]);
+            }
+        });
+        const reactSubscriber = subscribe(obj, property, {
+            set: (target, p, value, old) => {
+                if (value !== old) {
+                    ref[refProperty] = value;
+                }
+            },
+            get: () => {
+                _invokeGetter(ref[refProperty]);
+            }
+        });
+
+        subscribers = [refSubscriber, reactSubscriber];
+        map[property] = subscribers;
+        proxyRefSubscribesMap.set(obj, map);
+    }
 }
 
 export function react(origin, isShallow = false) {
@@ -186,6 +237,10 @@ export function getRefProperty(obj) {
         throw new TypeError(`obj is not the ref.`);
     }
     return refOriginMap.get(obj).property;
+}
+
+export function getRefValue(obj) {
+    return obj[getRefProperty(obj)];
 }
 
 export function computed(options) {
