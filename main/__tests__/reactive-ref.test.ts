@@ -234,7 +234,26 @@ describe('reactive.ts', () => {
         const name = ref('kitty');
         const dog = react({ name });
 
-        expect(dog.name).toBe('kitty');
+        subscribe(dog, {
+            get: (...args) => {
+                console.log(...args);
+            }, // > 1
+            set: assert  // > 0
+        });
+
+        expect(name.value).toBe('kitty');
+
+        expect.assertions(1 + 1);
 
     });
+
+    // it('should works for ref getter / setter deeply in react obj', function() {
+    //     const name = ref('kitty');
+    //     const dog = react({ name });
+    //
+    //     expect(dog.name).toBe('kitty');
+    //
+    //
+    //
+    // });
 });

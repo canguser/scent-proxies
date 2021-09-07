@@ -1,4 +1,5 @@
 const originProxyMap = new WeakMap();
+const originReadonlyMap = new WeakMap();
 const proxyOriginMap = new WeakMap();
 const originParentsMap = new WeakMap();
 const originSubscribeMap = new WeakMap();
@@ -154,6 +155,17 @@ function _initGlobalSubscriber(origin) {
     _addSubscribe(origin, globalHandler);
 }
 
+function _removeOriginParent(origin, parent, parentProperty) {
+    if (parent != null) {
+        const parents = originParentsMap.get(origin) || [];
+        const targetParent = parents.find(p => p.parent === parent && p.parentProperty === parentProperty);
+        if (targetParent) {
+            const index = parents.indexOf(targetParent);
+            parents.splice(index, 1);
+        }
+    }
+}
+
 function _addOriginParent(origin, parent, parentProperty) {
     if (parent != null) {
         const parents = originParentsMap.get(origin) || [];
@@ -170,56 +182,87 @@ function _addOriginParent(origin, parent, parentProperty) {
     }
 }
 
-function _react(origin, isShallow = false, parent?: object, parentProperty?: string | symbol) {
+function _readonly(obj) {
 
-    if (isRef(origin) && parent) {
-        return getRefValue(origin);
+}
+
+export function unwrapProxies(target, deeply = true) {
+    if (typeof target === 'object') {
+        target = getOrigin(target);
+        for (const key of Object.keys(target)) {
+            let propertyValue = target[key];
+            if (isReactive(propertyValue)) {
+                linkProperty(target, key, propertyValue);
+                propertyValue = getOrigin(propertyValue);
+            }
+            target[key] = propertyValue;
+            if (typeof propertyValue === 'object' && deeply) {
+                unwrapProxies(propertyValue, deeply);
+            }
+        }
     }
+}
 
+export function react(origin) {
+    unwrapProxies(origin);
+    return _react(origin);
+}
+
+function _react(origin) {
     origin = getOrigin(origin);
-    parent = getOrigin(parent);
-
-    _addOriginParent(origin, parent, parentProperty);
-
     const proxy = originProxyMap.get(origin) || new Proxy(origin, {
-        get(target: any, p: string | symbol, receiver: any): any {
-            let originValue;
-            let value = originValue = Reflect.get(target, p, receiver);
-            if (typeof value === 'object' && !isShallow) {
-                value = _react(value, isShallow, target, p);
-            }
-            _notifyOriginParents(target, 'get', p, originValue);
-            return value;
+        get(target: any, p: string | symbol): any {
+            return getProperty(target, p);
         },
-        set(target: any, p: string | symbol, value: any, receiver: any): boolean {
-            let old = Reflect.get(target, p, receiver);
-            const isRefValue = isRef(value);
-            const isRefOldValue = isRef(old);
-            if (isRefOldValue && !isRefValue) {
-                // clear old value
-                Reflect.set(target, p, null, receiver);
-                // link old value
-                linkRef(target, p, old);
-                // assign the new value
-                return Reflect.set(receiver, p, value);
-            }
-            if (isRefValue) {
-                return linkRef(target, p, value);
-            }
-            const setResult = Reflect.set(target, p, value, receiver);
-            if (setResult) {
-                _notifyOriginParents(target, 'set', p, value, old);
-            }
-            return setResult;
+        set(target: any, p: string | symbol, value: any): boolean {
+            return linkProperty(target, p, value);
         }
     });
-
     originProxyMap.set(origin, proxy);
     proxyOriginMap.set(proxy, origin);
     return proxy;
 }
 
-export function linkRef(obj, property, ref): boolean {
+export function getProperty(target, property, notify = true) {
+    if (typeof target == 'object') {
+        target = getOrigin(target);
+        let value = Reflect.get(target, property);
+        if (typeof value === 'object') {
+            _addOriginParent(value, target, property);
+            value = getReact(value);
+        }
+        if (notify) {
+            _notifyOriginParents(target, 'get', property, getOrigin(value));
+        }
+        return value;
+    }
+}
+
+export function linkProperty(target, property, value, notify = true) {
+    if (typeof target == 'object') {
+        target = getOrigin(target);
+        const old = Reflect.get(target, property);
+
+        if (typeof value === 'object') {
+            value = getOrigin(value);
+            if (typeof old === 'object') {
+                _removeOriginParent(old, target, property);
+            }
+            _addOriginParent(value, target, property);
+        }
+
+        const setResult = Reflect.set(target, property, value);
+
+        if (notify && setResult) {
+            _notifyOriginParents(target, 'set', property, value, old);
+        }
+
+        return setResult;
+    }
+    return false;
+}
+
+export function linkRef(obj, property, ref, notify = true): boolean {
     if (isRef(ref)) {
         obj = getReact(obj);
 
@@ -230,7 +273,7 @@ export function linkRef(obj, property, ref): boolean {
             subscriber.stop();
         }
 
-        const setResult = Reflect.set(obj, property, getRefValue(ref));
+        const setResult = Reflect.set(notify ? obj : getOrigin(obj), property, getRefValue(ref));
 
         if (setResult) {
             const refProperty = getRefProperty(ref);
@@ -265,13 +308,9 @@ export function linkRef(obj, property, ref): boolean {
     return false;
 }
 
-export function react(origin, isShallow = false) {
-    return _react(origin, isShallow);
-}
-
 export function ref(value, property = 'value') {
     const origin = { [property]: value };
-    const ref = react(origin, true);
+    const ref = react(origin);
     refOriginMap.set(ref, { origin: origin, property });
     return ref;
 }
@@ -343,8 +382,8 @@ export function getOrigin(obj) {
     return proxyOriginMap.get(obj) || obj;
 }
 
-export function getReact(obj, isShallow = false) {
-    return originProxyMap.get(obj) || react(obj, isShallow);
+export function getReact(obj) {
+    return originProxyMap.get(obj) || react(obj);
 }
 
 function _parsedPropertyHandler(propertyChain, handler = {}) {
