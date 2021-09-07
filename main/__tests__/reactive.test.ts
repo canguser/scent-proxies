@@ -1,10 +1,10 @@
-import { react, ref, subscribe } from '../reactive';
+import { isReactive, react, ref, subscribe } from '../reactive';
 
 function assert() {
     expect(1).toBe(1);
 }
 
-describe('', () => {
+describe('reactive.ts', () => {
 
     it('should test', function() {
         const a = react({ a: 1 });
@@ -82,15 +82,78 @@ describe('', () => {
         expect.assertions(4);
     });
 
+    it('should link ref - getter - 01', function() {
+        const dog = react({ name: 'kitty' });
+        const dogRef = ref(dog);
+
+        subscribe(dog, {
+            get: assert
+        });
+
+        dogRef.value.name;
+
+        expect.assertions(1);
+
+    });
+
+    it('should re-assign to other ref', function() {
+        const name = ref('kitty');
+        const name1 = ref('kitty1');
+
+        const dog = react({});
+        dog.name = name;
+
+        dog.name = 'nuilla';
+
+        expect(name.value).toBe('nuilla');
+
+        dog.name = name1;
+
+        expect(name.value).toBe('nuilla');
+
+        dog.name = 'aura';
+
+        expect(name.value).toBe('nuilla');
+        expect(name1.value).toBe('aura');
+
+    });
+
+    it('should link ref - getter - 02', function() {
+        const dog = react({ name: 'kitty' });
+        const dogRef = ref(dog);
+        const you = react({});
+        you.dog = dogRef;
+
+        subscribe(you, {
+            get: assert
+        });
+
+        dogRef.value.name;
+
+        expect.assertions(2);
+    });
+
+    it('should link ref - setter - 01', function() {
+        const dog = react({ name: 'kitty' });
+        const dogRef = ref(dog);
+
+        subscribe(dogRef, {
+            set: assert
+        });
+
+        const you = react({});
+        you.dog = dogRef;
+
+        you.dog = { name: 'lilia' }; // 1
+
+        expect.assertions(1);
+    });
+
     it('should link ref (react object) - 01', function() {
         const dog = react({
             name: 'kitty',
             age: 5
         });
-
-        function assert() {
-            expect(1).toBe(1);
-        }
 
         const dogRef = ref(dog);
 
@@ -124,8 +187,8 @@ describe('', () => {
         const dogRef = ref(dog);
 
         subscribe(dogRef, {
-            get: assert, // 1
-            set: assert  // 0
+            get: assert // 2
+            // set: assert  // 0
         });
 
         const you = react({
@@ -133,7 +196,7 @@ describe('', () => {
         });
 
         subscribe(you, {
-            get: assert, // 3
+            get: assert, // 4
             set: assert  // 2
         });
 
@@ -149,9 +212,29 @@ describe('', () => {
 
         expect.assertions(
             3 + 1 +     // dog
-            1 +         // dog ref
-            3 + 2 +     // you
+            2 +         // dog ref
+            4 + 2 +     // you
             3           // expect
         );
+    });
+
+    it('should works for ref setter in react obj', function() {
+        const name = ref('kitty');
+        const dog = react({ name });
+
+        dog.name = 'hit';
+        expect(name.value).toBe('hit');
+
+        name.value = 'kit';
+        expect(dog.name).toBe('kit');
+
+    });
+
+    it('should works for ref getter in react obj', function() {
+        const name = ref('kitty');
+        const dog = react({ name });
+
+        expect(dog.name).toBe('kitty');
+
     });
 });

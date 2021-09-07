@@ -90,17 +90,48 @@ export function _getMaps() {
     ];
 }
 
-function _notifyOriginParents(origin, type, property, ...args) {
-    const parents: any[] = _getOriginParentsWithChain(origin, [property]);
-    parents.push({ parent: origin, propertyChain: property });
-    for (const { parent, propertyChain } of parents) {
-        const subscribes = originSubscribeMap.get(parent) || [];
-        for (const subscribe of subscribes) {
-            if (subscribe && typeof subscribe[type] === 'function') {
-                subscribe[type](getReact(parent), propertyChain, ...args);
-            }
+let notifyStack: Array<any[]> = [];
+
+function _hasNotified(...args) {
+    return notifyStack.some(
+        as => args.every((a, i) => a === as[i])
+    );
+}
+
+function _clearNotifyStack(...args) {
+    for (let i = 0; i < notifyStack.length; i++) {
+        const notifyArgs = notifyStack[i];
+        if (args.every((a, i) => a === notifyArgs[i])) {
+            notifyStack.splice(i, 1);
+            return;
         }
     }
+}
+
+function _notifyOriginParents(origin, type, property, ...args) {
+
+    const allArgs = [origin, type, property, ...args];
+
+    if (_hasNotified(...allArgs)) {
+        return;
+    }
+
+    notifyStack.push(allArgs);
+    try {
+        const parents: any[] = _getOriginParentsWithChain(origin, [property]);
+        parents.push({ parent: origin, propertyChain: property });
+        for (const { parent, propertyChain } of parents) {
+            const subscribes = originSubscribeMap.get(parent) || [];
+            for (const subscribe of subscribes) {
+                if (subscribe && typeof subscribe[type] === 'function') {
+                    subscribe[type](getReact(parent), propertyChain, ...args);
+                }
+            }
+        }
+    } finally {
+        notifyStack.pop();
+    }
+
 }
 
 function _getOriginParents(origin: object): any[] {
@@ -141,6 +172,10 @@ function _addOriginParent(origin, parent, parentProperty) {
 
 function _react(origin, isShallow = false, parent?: object, parentProperty?: string | symbol) {
 
+    if (isRef(origin) && parent) {
+        return getRefValue(origin);
+    }
+
     origin = getOrigin(origin);
     parent = getOrigin(parent);
 
@@ -157,17 +192,21 @@ function _react(origin, isShallow = false, parent?: object, parentProperty?: str
             return value;
         },
         set(target: any, p: string | symbol, value: any, receiver: any): boolean {
-            const old = Reflect.get(target, p, receiver);
-            const originValue = value;
-            if (isRef(value)) {
-                value = getRefValue(value);
-                linkRef(receiver, p, originValue);
+            let old = Reflect.get(target, p, receiver);
+            const isRefValue = isRef(value);
+            const isRefOldValue = isRef(old);
+            if (isRefOldValue && !isRefValue) {
+                // clear old value
+                Reflect.set(target, p, null, receiver);
+                // link old value
+                linkRef(target, p, old);
+                // assign the new value
+                return Reflect.set(receiver, p, value);
             }
-            if (isReactive(value)) {
-                // keep all value to set is none-proxy
-                value = getOrigin(value);
+            if (isRefValue) {
+                return linkRef(target, p, value);
             }
-            let setResult = Reflect.set(target, p, value, receiver);
+            const setResult = Reflect.set(target, p, value, receiver);
             if (setResult) {
                 _notifyOriginParents(target, 'set', p, value, old);
             }
@@ -180,8 +219,10 @@ function _react(origin, isShallow = false, parent?: object, parentProperty?: str
     return proxy;
 }
 
-export function linkRef(obj, property, ref) {
-    if (isRef(ref) && isReactive(obj)) {
+export function linkRef(obj, property, ref): boolean {
+    if (isRef(ref)) {
+        obj = getReact(obj);
+
         const map = proxyRefSubscribesMap.get(obj) || {};
         let subscribers = map[property] || [];
 
@@ -189,32 +230,39 @@ export function linkRef(obj, property, ref) {
             subscriber.stop();
         }
 
-        const refProperty = getRefProperty(ref);
-        const refSubscriber = subscribe(ref, refProperty, {
-            set: (target, p, value, old) => {
-                if (value !== old) {
-                    obj[property] = value;
-                }
-            },
-            get: () => {
-                _invokeGetter(obj[property]);
-            }
-        });
-        const reactSubscriber = subscribe(obj, property, {
-            set: (target, p, value, old) => {
-                if (value !== old) {
-                    ref[refProperty] = value;
-                }
-            },
-            get: () => {
-                _invokeGetter(ref[refProperty]);
-            }
-        });
+        const setResult = Reflect.set(obj, property, getRefValue(ref));
 
-        subscribers = [refSubscriber, reactSubscriber];
-        map[property] = subscribers;
-        proxyRefSubscribesMap.set(obj, map);
+        if (setResult) {
+            const refProperty = getRefProperty(ref);
+            const refSubscriber = subscribe(ref, refProperty, {
+                set: (target, p, value, old) => {
+                    if (value !== old) {
+                        obj[property] = value;
+                    }
+                },
+                get: () => {
+                    _invokeGetter(obj[property]);
+                }
+            });
+            const reactSubscriber = subscribe(obj, property, {
+                set: (target, p, value, old) => {
+                    if (value !== old) {
+                        ref[refProperty] = value;
+                    }
+                },
+                get: () => {
+                    _invokeGetter(ref[refProperty]);
+                }
+            });
+
+            subscribers = [refSubscriber, reactSubscriber];
+            map[property] = subscribers;
+            proxyRefSubscribesMap.set(obj, map);
+            return true;
+        }
+        return false;
     }
+    return false;
 }
 
 export function react(origin, isShallow = false) {
