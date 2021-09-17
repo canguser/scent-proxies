@@ -1,4 +1,4 @@
-import { isReactive, react, ref, subscribe } from '../reactive';
+import { isProxy, react, ref, subscribe } from '../reactive';
 
 function assert() {
     expect(1).toBe(1);
@@ -6,9 +6,6 @@ function assert() {
 
 describe('reactive.ts', () => {
 
-    it('should test', function() {
-        const a = react({ a: 1 });
-    });
 
     it('should link ref (normal object)', function() {
         const a = react({ a: 1 });
@@ -187,8 +184,8 @@ describe('reactive.ts', () => {
         const dogRef = ref(dog);
 
         subscribe(dogRef, {
-            get: assert // 2
-            // set: assert  // 0
+            get: assert, // 3
+            set: assert  // 0
         });
 
         const you = react({
@@ -196,24 +193,39 @@ describe('reactive.ts', () => {
         });
 
         subscribe(you, {
-            get: assert, // 4
+            get: assert, // 5
             set: assert  // 2
         });
 
+        // you: get 1
+        // you: set 1
         you.dog = dogRef;
 
+        // dog: set 1
+        // you: set 1
         dog.name = 'monkey';
 
-        // 3
+        // dog: get 1
+        // dogRef: get 1
+        // you: get 1
         expect(dog.name).toBe('monkey');
+
+        // dogRef: get 1
+        // dog: get 1
+        // you: get 1
         expect(dogRef.value.name).toBe('monkey');
+
+        // you: get 2
+        // dog: get 1
+        // dogRef: get 1
         expect(you.dog.name).toBe('monkey');
 
+        // default 3
 
         expect.assertions(
-            3 + 1 +     // dog
+            4 + 1 +     // dog
             2 +         // dog ref
-            4 + 2 +     // you
+            5 + 2 +     // you
             3           // expect
         );
     });
@@ -235,9 +247,7 @@ describe('reactive.ts', () => {
         const dog = react({ name });
 
         subscribe(dog, {
-            get: (...args) => {
-                console.log(...args);
-            }, // > 1
+            get: assert, // > 1
             set: assert  // > 0
         });
 

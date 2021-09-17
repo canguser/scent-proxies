@@ -76,4 +76,37 @@ describe('reactive.ts - normal', () => {
 
     });
 
+    it('should test global subscriber', function() {
+        subscribe('all', {
+            get: assert, // 1 + 2 + 2
+            set: assert // 1 + 1 + 1 + 1
+        });
+
+        const you = react({
+            dog: react({
+                name: 'kitty'
+            })
+        });
+
+        const cat = react({
+            name: 'sandao'
+        });
+
+        cat.name = 'sandao0';
+
+        you.cat = cat;
+
+
+        you.dog.name = 'kitty1';
+
+        cat.name = 'sandao1';
+
+        expect(you.cat.name).toBe('sandao1');
+        expect(you.dog.name).toBe('kitty1');
+
+        expect.assertions(5 + 4 + 2);
+
+
+    });
+
 });

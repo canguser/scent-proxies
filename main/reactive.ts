@@ -1,5 +1,6 @@
 const originProxyMap = new WeakMap();
 const originReadonlyMap = new WeakMap();
+const originShallowMap = new WeakMap();
 const proxyOriginMap = new WeakMap();
 const originParentsMap = new WeakMap();
 const originSubscribeMap = new WeakMap();
@@ -29,7 +30,7 @@ export class Subscriber {
 
     constructor(private reactiveObject, private handler) {
         if (reactiveObject === 'all') {
-        } else if (!isReactive(reactiveObject)) {
+        } else if (!isProxy(reactiveObject)) {
             throw new TypeError('Must subscribe reactive obj');
         }
         this.start();
@@ -85,28 +86,12 @@ function _removeSubscribe(obj, handler) {
 function _invokeGetter(obj) {
 }
 
-export function _getMaps() {
-    return [
-        originSubscribeMap
-    ];
-}
-
 let notifyStack: Array<any[]> = [];
 
 function _hasNotified(...args) {
     return notifyStack.some(
         as => args.every((a, i) => a === as[i])
     );
-}
-
-function _clearNotifyStack(...args) {
-    for (let i = 0; i < notifyStack.length; i++) {
-        const notifyArgs = notifyStack[i];
-        if (args.every((a, i) => a === notifyArgs[i])) {
-            notifyStack.splice(i, 1);
-            return;
-        }
-    }
 }
 
 function _notifyOriginParents(origin, type, property, ...args) {
@@ -155,6 +140,10 @@ function _initGlobalSubscriber(origin) {
     _addSubscribe(origin, globalHandler);
 }
 
+function _removeGlobalSubscriber(origin) {
+    _removeSubscribe(origin, globalHandler);
+}
+
 function _removeOriginParent(origin, parent, parentProperty) {
     if (parent != null) {
         const parents = originParentsMap.get(origin) || [];
@@ -165,6 +154,7 @@ function _removeOriginParent(origin, parent, parentProperty) {
         }
     }
 }
+
 
 function _addOriginParent(origin, parent, parentProperty) {
     if (parent != null) {
@@ -177,8 +167,7 @@ function _addOriginParent(origin, parent, parentProperty) {
             parentProperty
         });
         originParentsMap.set(origin, parents);
-    } else {
-        _initGlobalSubscriber(origin);
+        _removeGlobalSubscriber(origin);
     }
 }
 
@@ -191,11 +180,11 @@ export function unwrapProxies(target, deeply = true) {
         target = getOrigin(target);
         for (const key of Object.keys(target)) {
             let propertyValue = target[key];
-            if (isReactive(propertyValue)) {
-                linkProperty(target, key, propertyValue);
-                propertyValue = getOrigin(propertyValue);
+            if (isProxy(propertyValue)) {
+                linkProperty(target, key, propertyValue, { shallow: !deeply, notify: false });
+            } else {
+                target[key] = propertyValue;
             }
-            target[key] = propertyValue;
             if (typeof propertyValue === 'object' && deeply) {
                 unwrapProxies(propertyValue, deeply);
             }
@@ -205,6 +194,7 @@ export function unwrapProxies(target, deeply = true) {
 
 export function react(origin) {
     unwrapProxies(origin);
+    _initGlobalSubscriber(origin);
     return _react(origin);
 }
 
@@ -223,11 +213,28 @@ function _react(origin) {
     return proxy;
 }
 
-export function getProperty(target, property, notify = true) {
+
+export interface GetterOptions {
+    notify?: boolean,
+    shallow?: boolean
+}
+
+export interface SetterOptions {
+    notify?: boolean,
+    shallow?: boolean
+}
+
+export function getProperty(target, property, options?: GetterOptions) {
+    options = {
+        notify: true,
+        shallow: false,
+        ...options
+    };
+    const { notify, shallow } = options;
     if (typeof target == 'object') {
         target = getOrigin(target);
         let value = Reflect.get(target, property);
-        if (typeof value === 'object') {
+        if (typeof value === 'object' && !shallow) {
             _addOriginParent(value, target, property);
             value = getReact(value);
         }
@@ -238,12 +245,24 @@ export function getProperty(target, property, notify = true) {
     }
 }
 
-export function linkProperty(target, property, value, notify = true) {
+export function linkProperty(target, property, value, options?: SetterOptions) {
+    options = {
+        notify: true,
+        shallow: false,
+        ...options
+    };
+    const { notify, shallow } = options;
     if (typeof target == 'object') {
         target = getOrigin(target);
         const old = Reflect.get(target, property);
 
-        if (typeof value === 'object') {
+        let wrapper;
+        if (isRef(value)) {
+            wrapper = _wrapRef(target, property, value);
+            value = wrapper.value;
+        }
+
+        if (typeof value === 'object' && !shallow) {
             value = getOrigin(value);
             if (typeof old === 'object') {
                 _removeOriginParent(old, target, property);
@@ -253,8 +272,13 @@ export function linkProperty(target, property, value, notify = true) {
 
         const setResult = Reflect.set(target, property, value);
 
-        if (notify && setResult) {
-            _notifyOriginParents(target, 'set', property, value, old);
+        if (setResult) {
+            if (notify) {
+                _notifyOriginParents(target, 'set', property, value, old);
+            }
+            if (wrapper) {
+                wrapper.afterWrapped();
+            }
         }
 
         return setResult;
@@ -262,7 +286,7 @@ export function linkProperty(target, property, value, notify = true) {
     return false;
 }
 
-export function linkRef(obj, property, ref, notify = true): boolean {
+function _wrapRef(obj, property, ref) {
     if (isRef(ref)) {
         obj = getReact(obj);
 
@@ -273,44 +297,58 @@ export function linkRef(obj, property, ref, notify = true): boolean {
             subscriber.stop();
         }
 
-        const setResult = Reflect.set(notify ? obj : getOrigin(obj), property, getRefValue(ref));
-
-        if (setResult) {
-            const refProperty = getRefProperty(ref);
-            const refSubscriber = subscribe(ref, refProperty, {
-                set: (target, p, value, old) => {
-                    if (value !== old) {
-                        obj[property] = value;
+        return {
+            value: getRefValue(ref),
+            afterWrapped: () => {
+                const refProperty = getRefProperty(ref);
+                const refSubscriber = subscribe(ref, refProperty, {
+                    set: (target, p, value, old) => {
+                        if (value !== old) {
+                            obj[property] = value;
+                        }
+                    },
+                    get: () => {
+                        _invokeGetter(obj[property]);
                     }
-                },
-                get: () => {
-                    _invokeGetter(obj[property]);
-                }
-            });
-            const reactSubscriber = subscribe(obj, property, {
-                set: (target, p, value, old) => {
-                    if (value !== old) {
-                        ref[refProperty] = value;
+                });
+                const reactSubscriber = subscribe(obj, property, {
+                    set: (target, p, value, old) => {
+                        if (value !== old) {
+                            ref[refProperty] = value;
+                        }
+                    },
+                    get: () => {
+                        _invokeGetter(ref[refProperty]);
                     }
-                },
-                get: () => {
-                    _invokeGetter(ref[refProperty]);
-                }
-            });
+                });
 
-            subscribers = [refSubscriber, reactSubscriber];
-            map[property] = subscribers;
-            proxyRefSubscribesMap.set(obj, map);
-            return true;
-        }
-        return false;
+                subscribers = [refSubscriber, reactSubscriber];
+                map[property] = subscribers;
+                proxyRefSubscribesMap.set(obj, map);
+            }
+        };
     }
-    return false;
+}
+
+export function shallowReact(obj) {
+    // unwrapProxies(obj, false);
+    _initGlobalSubscriber(obj);
+    const proxy = originShallowMap.get(obj) || new Proxy(obj, {
+        get(target: any, p: string | symbol): any {
+            return getProperty(target, p, { shallow: true });
+        },
+        set(target: any, p: string | symbol, value: any): boolean {
+            return linkProperty(target, p, value, { shallow: true });
+        }
+    });
+    originShallowMap.set(obj, proxy);
+    proxyOriginMap.set(proxy, obj);
+    return proxy;
 }
 
 export function ref(value, property = 'value') {
     const origin = { [property]: value };
-    const ref = react(origin);
+    const ref = shallowReact(origin);
     refOriginMap.set(ref, { origin: origin, property });
     return ref;
 }
@@ -374,7 +412,7 @@ export function computed(options) {
     return computedObj;
 }
 
-export function isReactive(obj) {
+export function isProxy(obj) {
     return proxyOriginMap.has(obj);
 }
 
@@ -383,7 +421,7 @@ export function getOrigin(obj) {
 }
 
 export function getReact(obj) {
-    return originProxyMap.get(obj) || react(obj);
+    return originProxyMap.get(obj) || _react(obj);
 }
 
 function _parsedPropertyHandler(propertyChain, handler = {}) {
