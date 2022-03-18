@@ -256,14 +256,4 @@ describe('reactive.ts', () => {
         expect.assertions(1 + 1);
 
     });
-
-    // it('should works for ref getter / setter deeply in react obj', function() {
-    //     const name = ref('kitty');
-    //     const dog = react({ name });
-    //
-    //     expect(dog.name).toBe('kitty');
-    //
-    //
-    //
-    // });
 });
