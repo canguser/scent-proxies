@@ -202,9 +202,16 @@ function _react(origin) {
     origin = getOrigin(origin);
     const proxy = originProxyMap.get(origin) || new Proxy(origin, {
         get(target: any, p: string | symbol): any {
+            // if property is symbol, return directly
+            if (typeof p === 'symbol') {
+                return Reflect.get(target, p);
+            }
             return getProperty(target, p);
         },
         set(target: any, p: string | symbol, value: any): boolean {
+            if (typeof p === 'symbol') {
+                return Reflect.set(target, p, value);
+            }
             return linkProperty(target, p, value);
         }
     });
@@ -335,9 +342,16 @@ export function shallowReact(obj) {
     _initGlobalSubscriber(obj);
     const proxy = originShallowMap.get(obj) || new Proxy(obj, {
         get(target: any, p: string | symbol): any {
+            // if p = symbol, then return directly
+            if (typeof p === 'symbol') {
+                return Reflect.get(target, p);
+            }
             return getProperty(target, p, { shallow: true });
         },
         set(target: any, p: string | symbol, value: any): boolean {
+            if (typeof p === 'symbol') {
+                return Reflect.set(target, p, value);
+            }
             return linkProperty(target, p, value, { shallow: true });
         }
     });
