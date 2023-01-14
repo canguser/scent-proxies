@@ -74,28 +74,24 @@ export function isRef(obj: any): obj is RefValue {
 
 let beingEffect: Effect = null
 
+function doInEffect(eff, cb: EffectCallback) {
+    try {
+        beingEffect = eff
+        cb(eff)
+    } catch (err) {
+        log.error(err)
+    } finally{
+        beingEffect = null;
+    }
+}
+
 export function watchEffect(effect: EffectCallback): Effect {
     const effObj = new Effect((eff)=>{
         eff.clear()
-        try {
-            beingEffect = eff
-            effect(eff)
-        } catch (err) {
-            log.error(err)
-        } finally{
-            beingEffect = null;
-        }
-
+        doInEffect(eff, effect)
     }, {
         immediate:(eff: Effect)=>{
-            try {
-                beingEffect = eff
-                effect(eff)
-            } catch (err) {
-                log.error(err)
-            } finally{
-                beingEffect = null;
-            }
+            doInEffect(eff, effect)
         },
         throttle: !options.noThrottle
     });
@@ -230,10 +226,35 @@ export function toRefs<T extends object>(obj: ReactivityWrapper<T>): Refs<T[keyo
     return result;
 }
 
-export function computed<T>(fn: (this: void) => T): RefValue<T> {
+export function setRaw<T extends object, K extends keyof T>(obj: ReactivityWrapper<T>, key: K, value: T[K]) {
+    const raw = toRaw(obj);
+    raw[key] = value;
+}
+
+export type ComputedOption<T> = {
+    get: () => T;
+    set?: (v: T) => void;
+}
+
+export function computed<T>(fnOpt: ComputedOption<T> | ((this: void) => T)): RefValue<T> {
+    let realOpt = fnOpt as ComputedOption<T>;
+    if (typeof fnOpt === 'function') {
+        realOpt = { get: fnOpt };
+    }
+
     const computed: ReactivityWrapper<{ value: T }> = reactivity({ value: null });
+
     watchEffect(() => {
-        computed.value = fn();
+        computed.value = realOpt.get();
     });
+
+    if (realOpt.set && typeof realOpt.set === 'function') {
+        registerEffect(toRaw(computed), 'value', new Effect(() => {
+            realOpt.set(computed.value);
+        }, {
+            throttle: !options.noThrottle
+        }))
+    }
+
     return toRef(computed, 'value');
 }

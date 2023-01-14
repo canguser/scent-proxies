@@ -1,4 +1,4 @@
-import { computed, options, reactivity, ref, toRefs, watchEffect } from '../main/reactivity';
+import { clearEffects, computed, options, reactivity, ref, setRaw, toRefs, watchEffect } from '../main/reactivity';
 import { nextTick } from '../utils/frame';
 
 describe('test reactivity', () => {
@@ -185,6 +185,59 @@ describe('test reactivity', () => {
         expect(name.value).toBe('999 888 300 false')
     });
 
+    it('should computed works', function() {
+        const a = reactivity({b:1})
+        const ab = computed(()=>a.b)
+        expect(ab.value).toBe(1)
+        a.b = 999
+        expect(ab.value).toBe(999)
+    });
+
+    it('should computed setter works', function() {
+        const a = reactivity({b:1})
+        const ab = computed({
+            get: ()=>a.b,
+            set: (v)=>{
+                console.log('set',v)
+                setRaw(a,'b',v)
+            }
+        })
+        expect(ab.value).toBe(1)
+        ab.value = 999
+        expect(ab.value).toBe(999)
+        expect(a.b).toBe(999)
+    });
+
+    it('should clear effects', function() {
+        const a = reactivity({a:1, b:2})
+        let _a = 0, _b = 0
+
+        const aw = watchEffect(()=>{
+            _a = a.a
+        })
+
+        const bw = watchEffect(()=>{
+            _b = a.b
+        })
+
+        expect(_a).toBe(1)
+        expect(_b).toBe(2)
+
+        a.a = 999
+        a.b = 888
+
+        expect(_a).toBe(999)
+        expect(_b).toBe(888)
+
+        clearEffects([aw, bw])
+
+        a.a = 777
+        a.b = 666
+
+        expect(_a).toBe(999)
+        expect(_b).toBe(888)
+    });
+
     it('should test throttle', async function() {
 
         options.noThrottle = false
@@ -215,4 +268,6 @@ describe('test reactivity', () => {
         await waitTick()
         expect(name.value).toBe('999 888 300 false')
     })
+
+
 });
